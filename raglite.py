@@ -2,6 +2,10 @@ from elasticsearch import Elasticsearch
 import os
 import ollama
 import numpy as np
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Elasticsearch configuration
 HOST_URL = os.getenv('ELASTICSEARCH_HOST', 'http://localhost:1200')
@@ -391,7 +395,7 @@ print("\n🔍 Looking for dataset index with embeddings...")
 dataset_index = "ragflow_45f257f2c38111f0a8bf07e3ef4fa8b4"  # Hardcode for testing
 
 if dataset_index:
-    sample_query = "买苹果"
+    sample_query = "请问如何采购办公用品？"  # Example query in Chinese
     print(f"\n🤖 Using embedding model: {EMBEDDING_MODEL}")
     
     # Step 1: Semantic search

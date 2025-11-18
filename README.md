@@ -133,7 +133,7 @@ curl -X POST "http://localhost:8000/rag/generate" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "Your question here",
-    "index_name": "specific-dataset-index",  // Optional: specify dataset
+    "index_name": "ragflow_45f257f2c38111f0a8bf07e3ef4fa8b4",
     "top_k": 3,
     "kb_id": "specific-kb-id",              // Optional: filter by knowledge base
     "filename_pattern": "*.xlsx"            // Optional: filter by filename pattern
@@ -207,6 +207,7 @@ curl -X POST "http://localhost:8000/rag/generate" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "your question",
+    "index_name": "ragflow_45f257f2c38111f0a8bf07e3ef4fa8b4",
     "kb_id": "4e2fdd04c48a11f0a5d79dda1442bdb4"
   }'
 ```
@@ -217,6 +218,7 @@ curl -X POST "http://localhost:8000/rag/generate" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "your question",
+    "index_name": "ragflow_45f257f2c38111f0a8bf07e3ef4fa8b4",
     "filename_pattern": "*.xlsx"
   }'
 ```
@@ -227,6 +229,7 @@ curl -X POST "http://localhost:8000/rag/generate" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "your question",
+    "index_name": "ragflow_45f257f2c38111f0a8bf07e3ef4fa8b4",
     "kb_id": "specific-kb-id",
     "filename_pattern": "*.pdf"
   }'
@@ -245,11 +248,19 @@ RAGLite supports hybrid search that combines semantic vector similarity with key
 ```bash
 # Enable hybrid search (default: enabled)
 curl -X POST "http://localhost:8000/rag/generate" \
-  -d '{"query": "买苹果", "hybrid_boost": true}'
+  -d '{
+    "query": "买苹果",
+    "index_name": "ragflow_45f257f2c38111f0a8bf07e3ef4fa8b4",
+    "hybrid_boost": true
+  }'
 
 # Disable for pure semantic search
 curl -X POST "http://localhost:8000/rag/generate" \
-  -d '{"query": "买苹果", "hybrid_boost": false}'
+  -d '{
+    "query": "买苹果",
+    "index_name": "ragflow_45f257f2c38111f0a8bf07e3ef4fa8b4",
+    "hybrid_boost": false
+  }'
 ```
 
 **How Hybrid Search Works**:
@@ -264,7 +275,76 @@ curl -X POST "http://localhost:8000/rag/generate" \
 
 ## ⚙️ Configuration
 
-### Environment Variables
+### Hybrid Configuration Approach (Recommended)
+
+RAGLite uses a **hybrid configuration approach** that combines the best of both worlds:
+
+- **Environment Variables**: Set defaults for production deployments and sensitive settings
+- **API Parameters**: Override defaults per request for flexibility and testing
+
+### Setup Environment Variables (Recommended)
+
+RAGLite now automatically loads environment variables from a `.env` file:
+
+```bash
+# 1. Copy the template
+cp .env.example .env
+
+# 2. Edit with your values
+nano .env
+
+# 3. Install dependencies (includes python-dotenv)
+pip install -r requirements.txt
+
+# 4. Start the service - .env is loaded automatically
+conda activate ./venv && python rag_service.py
+```
+
+**The `.env` file is automatically loaded and kept out of version control for security.**
+
+#### Usage Examples
+
+**1. Simple API Call (uses environment defaults):**
+```bash
+curl -X POST "http://localhost:8000/rag/generate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "买苹果",
+    "index_name": "ragflow_45f257f2c38111f0a8bf07e3ef4fa8b4"
+  }'
+```
+
+**2. Override Specific Settings:**
+```bash
+curl -X POST "http://localhost:8000/rag/generate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "买苹果",
+    "index_name": "ragflow_45f257f2c38111f0a8bf07e3ef4fa8b4",
+    "embedding_model": "qwen3-embedding:8b",
+    "top_k": 5
+  }'
+```
+
+**3. Full Control (specify everything):**
+```bash
+curl -X POST "http://localhost:8000/rag/generate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "买苹果",
+    "index_name": "ragflow_45f257f2c38111f0a8bf07e3ef4fa8b4",
+    "embedding_server": "http://localhost:11434",
+    "llm_server": "http://localhost:11434",
+    "dataset_server": "http://localhost:1200",
+    "embedding_model": "bge-m3:latest",
+    "llm_model": "qwen3:32b",
+    "es_username": "elastic",
+    "es_password": "infini_rag_flow",
+    "top_k": 3
+  }'
+```
+
+### Environment Variables Reference
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -277,27 +357,25 @@ curl -X POST "http://localhost:8000/rag/generate" \
 | `EMBEDDING_MODEL` | `bge-m3:latest` | Default embedding model name |
 | `LLM_MODEL` | `qwen3:32b` | Default LLM model name |
 
-**Configuration File**: Copy `.env.example` to `.env` and update values for your environment.
+### API Parameters Reference
 
-### API Parameters
-
-#### RAGRequest Model
+All API parameters are **optional** except `query` and `index_name` - they override environment variable defaults:
 
 ```json
 {
   "query": "string",                    // Required: Search query
-  "embedding_server": "http://localhost:11434",  // Ollama embedding server URL
-  "llm_server": "http://localhost:11434",        // Ollama LLM server URL
-  "dataset_server": "http://localhost:1200",     // Elasticsearch server URL
-  "embedding_model": "qwen3-embedding:8b",       // Embedding model name (example)
-  "llm_model": "qwen3:32b",                       // LLM model name (example)
-  "es_username": "elastic",                       // Elasticsearch username
-  "es_password": "your_password",                 // Elasticsearch password
-  "index_name": null,                             // Elasticsearch index (auto-detected if null)
-  "top_k": 3,                                     // Number of documents to retrieve
-  "kb_id": null,                                  // Optional: filter by knowledge base ID
-  "filename_pattern": null,                       // Optional: filter by filename pattern (wildcards supported)
-  "hybrid_boost": true                            // Use hybrid search (semantic + keyword) for better results
+  "index_name": "string",               // Required: Elasticsearch index name
+  "embedding_server": "http://localhost:11434",  // Optional: Ollama embedding server URL
+  "llm_server": "http://localhost:11434",        // Optional: Ollama LLM server URL
+  "dataset_server": "http://localhost:1200",     // Optional: Elasticsearch server URL
+  "embedding_model": "bge-m3:latest",             // Optional: Embedding model name
+  "llm_model": "qwen3:32b",                        // Optional: LLM model name
+  "es_username": "elastic",                        // Optional: Elasticsearch username
+  "es_password": "your_password",                  // Optional: Elasticsearch password
+  "top_k": 3,                                      // Optional: Number of documents to retrieve
+  "kb_id": null,                                   // Optional: filter by knowledge base ID
+  "filename_pattern": null,                        // Optional: filter by filename pattern (wildcards supported)
+  "hybrid_boost": true                             // Optional: Use hybrid search (semantic + keyword)
 }
 ```
 
