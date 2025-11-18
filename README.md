@@ -269,8 +269,15 @@ curl -X POST "http://localhost:8000/rag/generate" \
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8000` | Web service port |
+| `ELASTICSEARCH_HOST` | `http://localhost:1200` | Elasticsearch server URL |
+| `ELASTICSEARCH_PASSWORD` | `infini_rag_flow` | Elasticsearch password |
 | `ELASTIC_USERNAME` | `elastic` | Elasticsearch username |
-| `ELASTIC_PASSWORD` | `your_password` | Elasticsearch password |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL for LLM generation |
+| `EMBEDDING_HOST` | `OLLAMA_HOST` | Ollama server URL for embeddings (defaults to same as OLLAMA_HOST) |
+| `EMBEDDING_MODEL` | `bge-m3:latest` | Default embedding model name |
+| `LLM_MODEL` | `qwen3:32b` | Default LLM model name |
+
+**Configuration File**: Copy `.env.example` to `.env` and update values for your environment.
 
 ### API Parameters
 

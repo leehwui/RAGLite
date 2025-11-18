@@ -12,13 +12,13 @@ app = FastAPI(title="RAG Web Service", description="Retrieval-Augmented Generati
 
 class RAGRequest(BaseModel):
     query: str
-    embedding_server: str = "http://localhost:11434"  # Ollama server for embeddings
-    llm_server: str = "http://localhost:11434"       # Ollama server for LLM
-    dataset_server: str = "http://localhost:1200"    # Elasticsearch server
-    embedding_model: str = "qwen3-embedding:8b"
-    llm_model: str = "qwen3:32b"
-    es_username: str = "elastic"
-    es_password: str = "infini_rag_flow"
+    embedding_server: str = os.getenv('EMBEDDING_HOST', os.getenv('OLLAMA_HOST', 'http://localhost:11434'))  # Ollama server for embeddings
+    llm_server: str = os.getenv('OLLAMA_HOST', 'http://localhost:11434')       # Ollama server for LLM
+    dataset_server: str = os.getenv('ELASTICSEARCH_HOST', 'http://localhost:1200')    # Elasticsearch server
+    embedding_model: str = os.getenv('EMBEDDING_MODEL', 'qwen3-embedding:8b')
+    llm_model: str = os.getenv('LLM_MODEL', 'qwen3:32b')
+    es_username: str = os.getenv('ELASTIC_USERNAME', 'elastic')
+    es_password: str = os.getenv('ELASTICSEARCH_PASSWORD', 'infini_rag_flow')
     index_name: Optional[str] = None  # If not provided, will auto-detect
     top_k: int = 3
     kb_id: Optional[str] = None  # Optional filter by knowledge base ID

@@ -4,8 +4,16 @@ import ollama
 import numpy as np
 
 # Elasticsearch configuration
-HOST_URL = "http://localhost:1200"
-ES_PASSWORD = "infini_rag_flow"
+HOST_URL = os.getenv('ELASTICSEARCH_HOST', 'http://localhost:1200')
+ES_PASSWORD = os.getenv('ELASTICSEARCH_PASSWORD', 'infini_rag_flow')
+
+# Ollama configuration
+OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
+EMBEDDING_HOST = os.getenv('EMBEDDING_HOST', OLLAMA_HOST)  # Default to same as OLLAMA_HOST
+
+# Model configuration
+EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'bge-m3:latest')
+LLM_MODEL = os.getenv('LLM_MODEL', 'qwen3:32b')
 
 # Authentication
 username = os.getenv('ELASTIC_USERNAME', 'elastic')
@@ -17,7 +25,10 @@ client = Elasticsearch(
 )
 
 # Ollama client for embeddings
-ollama_client = ollama.Client(host="http://localhost:11434")
+embedding_client = ollama.Client(host=EMBEDDING_HOST)
+
+# Ollama client for LLM generation
+ollama_client = ollama.Client(host=OLLAMA_HOST)
 
 # Test the connection
 try:
@@ -152,16 +163,18 @@ def find_dataset_index(client):
 
 
 # Function to get embedding from Ollama
-def get_embedding(text, model="qwen3-embedding:8b"):
+def get_embedding(text, model=None):
+    if model is None:
+        model = EMBEDDING_MODEL
     try:
-        response = ollama_client.embeddings(model=model, prompt=text)
+        response = embedding_client.embeddings(model=model, prompt=text)
         return np.array(response['embedding'])
     except Exception as e:
         print(f"Failed to get embedding: {e}")
         return None
 
 # Function to perform semantic search using embeddings
-def semantic_search(query_string, index_name, embedding_model="bge-m3:latest", size=3):
+def semantic_search(query_string, index_name, embedding_model=None, size=3):
     """
     Perform semantic search using qwen3-embedding:8b (4096 dimensions)
     
@@ -174,6 +187,8 @@ def semantic_search(query_string, index_name, embedding_model="bge-m3:latest", s
         filename_pattern: Optional filter by filename pattern (supports wildcards)
         hybrid_boost: Whether to use hybrid search (keyword + semantic) for better results
     """
+    if embedding_model is None:
+        embedding_model = EMBEDDING_MODEL
     # Check for 4096-dim embedding field
     try:
         mapping = client.indices.get_mapping(index=index_name)
@@ -219,9 +234,9 @@ def semantic_search(query_string, index_name, embedding_model="bge-m3:latest", s
         "_source": True,
         "query": {
             "script_score": {
-                "query": {"match_all": {}},
+                "query": {"exists": {"field": embedding_field}},
                 "script": {
-                    "source": "cosineSimilarity(params.query_vector, 'q_1024_vec')",
+                    "source": f"cosineSimilarity(params.query_vector, '{embedding_field}')",
                     "params": {"query_vector": query_embedding}
                 }
             }
@@ -294,10 +309,12 @@ def semantic_search(query_string, index_name, embedding_model="bge-m3:latest", s
         return None
 
 # Function to generate response using LLM with retrieved context
-def generate_with_context(query, search_results, model="qwen3:32b"):
+def generate_with_context(query, search_results, model=None):
     """
     Generate response using qwen3:32b with retrieved context
     """
+    if model is None:
+        model = LLM_MODEL
     if not search_results or 'hits' not in search_results or not search_results['hits']['hits']:
         print("No search results to use for generation")
         return None
@@ -364,7 +381,7 @@ dataset_index = "ragflow_45f257f2c38111f0a8bf07e3ef4fa8b4"  # Hardcode for testi
 
 if dataset_index:
     sample_query = "买苹果"
-    print(f"\n🤖 Using embedding model: bge-m3:latest")
+    print(f"\n🤖 Using embedding model: {EMBEDDING_MODEL}")
     
     # Step 1: Semantic search
     search_results = semantic_search(sample_query, dataset_index)
