@@ -1,0 +1,8 @@
+# Minimal requirements - only packages we directly imported (exact working versions)
+elasticsearch==8.19.2
+ollama==0.6.1
+numpy==2.3.5
+fastapi==0.121.2
+pydantic==2.12.4
+uvicorn==0.38.0
+requests==2.32.5
