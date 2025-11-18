@@ -174,7 +174,7 @@ def get_embedding(text, model=None):
         return None
 
 # Function to perform semantic search using embeddings
-def semantic_search(query_string, index_name, embedding_model=None, size=3):
+def semantic_search(query_string, index_name, embedding_model=None, size=3, kb_id=None, filename_pattern=None, hybrid_boost=True):
     """
     Perform semantic search using qwen3-embedding:8b (4096 dimensions)
     
@@ -189,6 +189,7 @@ def semantic_search(query_string, index_name, embedding_model=None, size=3):
     """
     if embedding_model is None:
         embedding_model = EMBEDDING_MODEL
+    
     # Check for 4096-dim embedding field
     try:
         mapping = client.indices.get_mapping(index=index_name)
@@ -213,6 +214,16 @@ def semantic_search(query_string, index_name, embedding_model=None, size=3):
         print(f"Failed to check mapping: {e}")
         return None
     
+    # Build filters for prefiltering
+    filters = [{"exists": {"field": embedding_field}}]  # Always require embedding field
+    if kb_id:
+        filters.append({"term": {"kb_id": kb_id}})
+    if filename_pattern:
+        filters.append({"wildcard": {"docnm_kwd": filename_pattern}})
+    
+    # Use filtered query
+    base_query = {"bool": {"filter": filters}}
+    
     # Get query embedding
     query_embedding = get_embedding(query_string, embedding_model)
     if query_embedding is None:
@@ -234,7 +245,7 @@ def semantic_search(query_string, index_name, embedding_model=None, size=3):
         "_source": True,
         "query": {
             "script_score": {
-                "query": {"exists": {"field": embedding_field}},
+                "query": base_query,
                 "script": {
                     "source": f"cosineSimilarity(params.query_vector, '{embedding_field}')",
                     "params": {"query_vector": query_embedding}
