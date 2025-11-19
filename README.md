@@ -1,4 +1,4 @@
-# RAGLite: Lightweight Retrieval-Augmented Generation System
+# RAGLite - Modular RAG Service
 
 ![RAGLite Logo](https://img.shields.io/badge/RAGLite-v0.1.0-blue?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.8+-green?style=flat-square)
@@ -6,7 +6,7 @@
 ![Elasticsearch](https://img.shields.io/badge/Elasticsearch-8.x-yellow?style=flat-square)
 ![Ollama](https://img.shields.io/badge/Ollama-Local%20LLMs-purple?style=flat-square)
 
-RAGLite is a lightweight, production-ready Retrieval-Augmented Generation (RAG) system that combines semantic search with large language models. Built for simplicity and performance, it enables you to create intelligent question-answering systems using your own documents and local AI models.
+RAGLite is a lightweight, production-ready Retrieval-Augmented Generation (RAG) system that combines semantic search with large language models. **Recently refactored into a clean, modular architecture** for better maintainability and extensibility.
 
 > **Note**: RAGLite is model-agnostic and works with any Ollama-compatible embedding and text generation models. The examples in this documentation use Qwen models, but you can use Llama, Mistral, or any other supported models.
 
@@ -19,9 +19,36 @@ RAGLite is a lightweight, production-ready Retrieval-Augmented Generation (RAG) 
 - **📡 Streaming Responses**: Real-time streaming generation for better user experience
 - **🔧 Configurable**: Flexible server endpoints and model configurations
 - **🚀 Production Ready**: Comprehensive error handling, logging, and health checks
-- **📦 Minimal Dependencies**: Lightweight footprint with carefully selected libraries
+- **📦 Modular Design**: Clean separation of concerns with dedicated packages
+- **🧩 Reusable Components**: Core functionality can be imported independently
 
 ## 🏗️ Architecture
+
+### New Modular Structure
+
+The project has been refactored from monolithic files into a clean, modular package structure:
+
+```
+raglite/
+├── core/           # Core RAG functionality
+│   ├── rag_service.py    # Main RAGService class
+│   └── __init__.py
+├── api/            # FastAPI endpoints and models
+│   ├── endpoints.py      # API endpoint handlers
+│   ├── models.py         # Pydantic request/response models
+│   └── __init__.py
+├── storage/        # Data persistence layer
+│   ├── redis_store.py    # Redis storage functions
+│   └── __init__.py
+├── config/         # Configuration management
+│   ├── settings.py       # Environment variable settings
+│   └── __init__.py
+└── cli/            # Command-line interface
+    ├── main.py           # CLI entry point
+    └── __init__.py
+```
+
+### Data Flow
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
@@ -42,6 +69,8 @@ RAGLite is a lightweight, production-ready Retrieval-Augmented Generation (RAG) 
 2. **Vector Database**: Elasticsearch with dense_vector fields for efficient similarity search
 3. **LLM Service**: Text generation using large language models with retrieved context (e.g., `qwen3:32b`)
 4. **Web API**: FastAPI service providing REST endpoints and streaming responses
+5. **Storage Layer**: Redis-backed task storage with automatic fallback to in-memory
+6. **Configuration**: Centralized settings management with environment variable support
 
 ## 📋 Prerequisites
 
@@ -87,7 +116,10 @@ pip install -r requirements.txt
 # Terminal 2: Start Ollama server (if not already running)
 ollama serve
 
-# Terminal 3: Pull your preferred models (examples)
+# Terminal 3: Start Redis (optional, for persistent task storage)
+redis-server
+
+# Terminal 4: Pull your preferred models (examples)
 ollama pull qwen3-embedding:8b  # Example embedding model
 ollama pull qwen3:32b          # Example LLM
 ```
@@ -101,7 +133,12 @@ Choose your preferred deployment method:
 python rag_service.py
 ```
 
-#### Option B: Standalone Script
+#### Option B: CLI Tool
+```bash
+python -m raglite.cli.main "What is machine learning?"
+```
+
+#### Option C: Standalone Script (Legacy)
 ```bash
 python raglite.py
 ```
@@ -149,7 +186,47 @@ curl -X POST "http://localhost:8000/rag/generate?stream=true" \
   }'
 ```
 
-### Standalone Usage
+### CLI Tool
+
+The new CLI provides direct access to RAG functionality:
+
+```bash
+# Basic query
+python -m raglite.cli.main "What is RAG?"
+
+# List available datasets
+python -m raglite.cli.main --list-datasets
+
+# Specify custom index and models
+python -m raglite.cli.main --index "my_dataset" --llm-model "llama2:13b" "Your question"
+
+# Full CLI options
+python -m raglite.cli.main --help
+```
+
+### Programmatic Usage
+
+Import and use individual components:
+
+```python
+from raglite.core.rag_service import RAGService
+from raglite.config.settings import Settings
+
+# Initialize service
+settings = Settings()
+rag_service = RAGService()
+
+# Connect to servers
+rag_service.connect_embedding_server(settings.embedding_host)
+rag_service.connect_llm_server(settings.ollama_host)
+rag_service.connect_dataset_server(settings.elasticsearch_host, settings.elastic_username, settings.elasticsearch_password)
+
+# Perform RAG query
+search_results = rag_service.semantic_search("your query", "index_name", "embedding_model")
+response = rag_service.generate_response("your query", search_results, "llm_model")
+```
+
+### Standalone Usage (Legacy)
 
 For development and testing, use the standalone script:
 
@@ -481,16 +558,32 @@ ollama pull <your-llm-model>
 ## 📁 Project Structure
 
 ```
-raglite/
-├── raglite.py              # Core RAG pipeline implementation
-├── rag_service.py          # FastAPI web service
-├── test_rag_api.py         # API testing script
-├── embeddding-test.py      # Basic embedding tests
-├── requirements.txt        # Full dependencies
-├── requirements-minimal.txt # Minimal dependencies
-├── README.md              # This file
+raglite-project/
+├── raglite/                # Main modular package
+│   ├── core/              # Core RAG functionality
+│   │   ├── rag_service.py # Main RAGService class
+│   │   └── __init__.py
+│   ├── api/               # FastAPI endpoints and models
+│   │   ├── endpoints.py   # API endpoint handlers
+│   │   ├── models.py      # Pydantic request/response models
+│   │   └── __init__.py
+│   ├── storage/           # Data persistence layer
+│   │   ├── redis_store.py # Redis storage functions
+│   │   └── __init__.py
+│   ├── config/            # Configuration management
+│   │   ├── settings.py    # Environment variable settings
+│   │   └── __init__.py
+│   └── cli/               # Command-line interface
+│       ├── main.py        # CLI entry point
+│       └── __init__.py
+├── rag_service.py         # FastAPI web service (entry point)
+├── raglite.py             # Standalone script (legacy)
+├── test_rag_api.py        # API testing script
+├── embeddding-test.py     # Basic embedding tests
+├── requirements.txt       # Full dependencies
+├── README.md             # This documentation
 └── etc/
-    └── aau_token          # Authentication tokens (if needed)
+    └── aau_token         # Authentication tokens (if needed)
 ```
 
 ## 🤝 Contributing
