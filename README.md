@@ -1,6 +1,6 @@
 # RAGLite: Lightweight Retrieval-Augmented Generation System
 
-![RAGLite Logo](https://img.shields.io/badge/RAGLite-v1.0.0-blue?style=for-the-badge)
+![RAGLite Logo](https://img.shields.io/badge/RAGLite-v0.1.0-blue?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.8+-green?style=flat-square)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.121+-orange?style=flat-square)
 ![Elasticsearch](https://img.shields.io/badge/Elasticsearch-8.x-yellow?style=flat-square)
