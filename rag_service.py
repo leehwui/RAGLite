@@ -14,7 +14,7 @@ from raglite.api.endpoints import (
     health_check
 )
 
-app = FastAPI(title="RAG Web Service", description="Retrieval-Augmented Generation API", version="1.0.0")
+app = FastAPI(title="RAG Web Service", description="Retrieval-Augmented Generation API", version="0.2.0")
 
 @app.get("/datasets")
 async def list_datasets_endpoint():
