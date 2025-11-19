@@ -8,6 +8,7 @@ import numpy as np
 from elasticsearch import Elasticsearch
 from typing import Optional
 from dotenv import load_dotenv
+import json
 
 # Load environment variables from .env file
 load_dotenv()
@@ -285,9 +286,85 @@ class RAGService:
             for chunk in stream:
                 if 'response' in chunk:
                     yield chunk['response']
+                elif 'thinking' in chunk:
+                    # Also yield thinking tokens for models that use thinking field
+                    yield chunk['thinking']
 
         except Exception as e:
             yield f"Error during generation: {str(e)}"
+
+    async def generate_sse_stream(self, query: str, search_results, llm_model: str):
+        """Generate Server-Sent Events (SSE) streaming response"""
+        # Send initial event with search results info
+        sources_count = len(search_results['hits']['hits']) if search_results and 'hits' in search_results else 0
+        yield f"event: search_complete\ndata: {json.dumps({'sources': sources_count})}\n\n"
+
+        if not search_results or 'hits' not in search_results or not search_results['hits']['hits']:
+            yield f"event: message\ndata: No relevant information found for your query.\n\n"
+            yield f"event: end\ndata: [DONE]\n\n"
+            return
+
+        # Extract top retrieved documents
+        retrieved_docs = []
+        for i, hit in enumerate(search_results['hits']['hits'][:3], 1):
+            content = ""
+            if '_source' in hit:
+                for field in ['content', 'text', 'chunk', 'message', 'content_with_weight']:
+                    if field in hit['_source']:
+                        content = str(hit['_source'][field])
+                        break
+                if not content and hit['_source']:
+                    content = str(hit['_source'])
+
+            retrieved_docs.append(f"Document {i}:\n{content}")
+
+        context = "\n\n".join(retrieved_docs)
+
+        prompt = f"""基于以下检索到的相关信息，请回答用户的问题。
+
+检索到的信息：
+{context}
+
+用户问题：{query}
+
+请基于上述信息提供准确、有用的回答。如果信息不足以完全回答问题，请说明。"""
+
+        try:
+            # Use streaming generation
+            stream = self.llm_client.generate(
+                model=llm_model,
+                prompt=prompt,
+                options={
+                    "temperature": 0.1,
+                    "top_p": 0.9,
+                    "num_predict": 512
+                },
+                stream=True
+            )
+
+            for chunk in stream:
+                if 'response' in chunk:
+                    # Send each token as an SSE message event
+                    token_data = json.dumps({
+                        'token': chunk['response'],
+                        'timestamp': chunk.get('created_at', '')
+                    })
+                    yield f"event: token\ndata: {token_data}\n\n"
+                elif 'thinking' in chunk:
+                    # Also send thinking tokens
+                    token_data = json.dumps({
+                        'token': chunk['thinking'],
+                        'type': 'thinking',
+                        'timestamp': chunk.get('created_at', '')
+                    })
+                    yield f"event: token\ndata: {token_data}\n\n"
+
+            # Send completion event
+            yield f"event: end\ndata: [DONE]\n\n"
+
+        except Exception as e:
+            error_data = json.dumps({'error': str(e)})
+            yield f"event: error\ndata: {error_data}\n\n"
 
 # Global service instance
 rag_service = RAGService()
@@ -308,7 +385,7 @@ async def list_datasets():
         raise HTTPException(status_code=500, detail=f"Failed to list datasets: {str(e)}")
 
 @app.post("/rag/generate")
-async def generate_rag_response(request: RAGRequest, stream: bool = False):
+async def generate_rag_response(request: RAGRequest, stream: bool = True, format: str = "sse"):
     """
     Generate RAG response for a query
 
@@ -325,7 +402,8 @@ async def generate_rag_response(request: RAGRequest, stream: bool = False):
     - **kb_id**: Optional filter by knowledge base ID to search only specific datasets
     - **filename_pattern**: Optional filter by filename pattern (supports wildcards like *.xlsx)
     - **hybrid_boost**: Whether to use hybrid search combining semantic and keyword matching (default: true)
-    - **stream**: Whether to stream the response (default: false)
+    - **stream**: Whether to stream the response (default: true)
+    - **format**: Response format - "json" or "sse" (default: sse, only used when stream=true)
     """
 
     # Explicit validation for required fields (now handled by Pydantic)
@@ -370,13 +448,25 @@ async def generate_rag_response(request: RAGRequest, stream: bool = False):
     )
 
     if stream:
-        # Return streaming response
-        return StreamingResponse(
-            rag_service.generate_streaming_response(request.query, search_results, llm_model),
-            media_type="text/plain"
-        )
+        if format == "sse":
+            # Return Server-Sent Events streaming response
+            return StreamingResponse(
+                rag_service.generate_sse_stream(request.query, search_results, llm_model),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*",
+                }
+            )
+        else:
+            # Return raw text streaming response (your current implementation)
+            return StreamingResponse(
+                rag_service.generate_streaming_response(request.query, search_results, llm_model),
+                media_type="text/plain"
+            )
     else:
-        # Return regular response
+        # Return regular JSON response
         response = rag_service.generate_response(request.query, search_results, llm_model)
         return {"response": response, "sources": len(search_results['hits']['hits']), "dataset": request.index_name}
 
