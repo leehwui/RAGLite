@@ -63,6 +63,17 @@ async def health_check_endpoint():
     return await health_check()
 
 if __name__ == "__main__":
+    # ASCII Art Banner
+    banner = r"""
+     ________  ________  ________  ___       ___  _________  _______
+    |\   __  \|\   __  \|\   ____\|\  \     |\  \|\___   ___\\  ___ \
+    \ \  \|\  \ \  \|\  \ \  \___|\ \  \    \ \  \|___ \  \_\ \   __/|
+     \ \   _  _\ \   __  \ \  \  __\ \  \    \ \  \   \ \  \ \ \  \_|/__
+      \ \  \\  \\ \  \ \  \ \  \|\  \ \  \____\ \  \   \ \  \ \ \  \_|\ \
+       \ \__\\ _\\ \__\ \__\ \_______\ \_______\ \__\   \ \__\ \ \_______\
+        \|__|\|__|\|__|\|__|\|_______|\|_______|\|__|    \|__|  \|_______|
+    """
+    print(banner)
     port = int(os.getenv("PORT", 8000))
     print(f"Starting RAG Web Service on port {port}")
     print("API Documentation available at: http://localhost:{port}/docs")
