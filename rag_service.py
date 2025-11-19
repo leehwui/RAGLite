@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import uvicorn
@@ -9,6 +9,9 @@ from elasticsearch import Elasticsearch
 from typing import Optional
 from dotenv import load_dotenv
 import json
+import uuid
+from typing import Dict
+import redis
 
 # Load environment variables from .env file
 load_dotenv()
@@ -31,6 +34,9 @@ class RAGRequest(BaseModel):
     kb_id: Optional[str] = Field(None, description="Optional filter by knowledge base ID")
     filename_pattern: Optional[str] = Field(None, description="Optional filter by filename pattern")
     hybrid_boost: bool = Field(True, description="Whether to use hybrid search")
+    # Streaming / response format preferences (optional)
+    stream: bool = Field(True, description="Whether to stream the response (default: true)")
+    format: str = Field("sse", description='Response format: "json" or "sse" (default: sse)')
 
 class RAGService:
     def __init__(self):
@@ -369,6 +375,158 @@ class RAGService:
 # Global service instance
 rag_service = RAGService()
 
+# Redis client for task storage
+def get_redis_client():
+    """Get Redis client with environment configuration"""
+    try:
+        redis_host = os.getenv('REDIS_HOST', 'localhost')
+        redis_port = int(os.getenv('REDIS_PORT', 6379))
+        redis_db = int(os.getenv('REDIS_DB', 0))
+        redis_password = os.getenv('REDIS_PASSWORD', None)
+        
+        # Remove empty password
+        if redis_password == '':
+            redis_password = None
+            
+        client = redis.Redis(
+            host=redis_host,
+            port=redis_port,
+            db=redis_db,
+            password=redis_password,
+            decode_responses=True,  # Automatically decode responses to strings
+            socket_connect_timeout=5,
+            socket_timeout=5
+        )
+        
+        # Test connection
+        client.ping()
+        print(f"✅ Connected to Redis at {redis_host}:{redis_port}")
+        return client
+    except Exception as e:
+        print(f"❌ Failed to connect to Redis: {e}")
+        print("ℹ️  Falling back to in-memory storage")
+        # Fallback to in-memory storage if Redis is not available
+        return None
+
+# Initialize Redis client
+redis_client = get_redis_client()
+
+# Fallback in-memory storage (only used if Redis is not available)
+task_status: Dict[str, Dict] = {}
+
+# Task storage functions using Redis
+def set_task_status(task_id: str, status: dict):
+    """Set task status in Redis"""
+    if redis_client:
+        try:
+            redis_client.set(f"task:{task_id}", json.dumps(status))
+            # Set expiration to 24 hours to prevent accumulation
+            redis_client.expire(f"task:{task_id}", 86400)
+        except Exception as e:
+            print(f"Failed to set task status in Redis: {e}")
+    else:
+        # Fallback to in-memory storage
+        task_status[task_id] = status
+
+def get_task_status_from_storage(task_id: str) -> Optional[dict]:
+    """Get task status from Redis"""
+    if redis_client:
+        try:
+            status_json = redis_client.get(f"task:{task_id}")
+            return json.loads(status_json) if status_json else None
+        except Exception as e:
+            print(f"Failed to get task status from Redis: {e}")
+            return None
+    else:
+        # Fallback to in-memory storage
+        return task_status.get(task_id)
+
+def get_all_task_statuses() -> Dict[str, dict]:
+    """Get all task statuses from Redis"""
+    if redis_client:
+        try:
+            # Get all task keys
+            task_keys = redis_client.keys("task:*")
+            tasks = {}
+            for key in task_keys:
+                task_id = key.replace("task:", "")
+                status_json = redis_client.get(key)
+                if status_json:
+                    tasks[task_id] = json.loads(status_json)
+            return tasks
+        except Exception as e:
+            print(f"Failed to get all task statuses from Redis: {e}")
+            return {}
+    else:
+        # Fallback to in-memory storage
+        return task_status
+
+def process_rag_request(task_id: str, request: RAGRequest):
+    """Background task to process RAG requests (synchronous for FastAPI BackgroundTasks)"""
+    try:
+        set_task_status(task_id, {"status": "processing", "progress": "Initializing..."})
+        
+        # Use environment variables as defaults for optional parameters
+        embedding_server = request.embedding_server or os.getenv('EMBEDDING_HOST', os.getenv('OLLAMA_HOST', 'http://localhost:11434'))
+        llm_server = request.llm_server or os.getenv('OLLAMA_HOST', 'http://localhost:11434')
+        dataset_server = request.dataset_server or os.getenv('ELASTICSEARCH_HOST', 'http://localhost:1200')
+        embedding_model = request.embedding_model or os.getenv('EMBEDDING_MODEL', 'bge-m3:latest')
+        llm_model = request.llm_model or os.getenv('LLM_MODEL', 'qwen3:32b')
+        es_username = request.es_username or os.getenv('ELASTIC_USERNAME', 'elastic')
+        es_password = request.es_password or os.getenv('ELASTICSEARCH_PASSWORD', 'infini_rag_flow')
+
+        set_task_status(task_id, {"status": "processing", "progress": "Connecting to servers..."})
+        
+        # Connect to servers
+        rag_service.connect_embedding_server(embedding_server)
+        rag_service.connect_llm_server(llm_server)
+        rag_service.connect_dataset_server(dataset_server, es_username, es_password)
+
+        set_task_status(task_id, {"status": "processing", "progress": "Validating dataset..."})
+        
+        # Validate the specified index
+        available_datasets = rag_service.list_available_datasets()
+        dataset_names = [d['index_name'] for d in available_datasets]
+        if request.index_name not in dataset_names:
+            available = ", ".join(dataset_names) if dataset_names else "none"
+            set_task_status(task_id, {
+                "status": "failed", 
+                "error": f"Dataset index '{request.index_name}' not found or does not contain embeddings. Available datasets: {available}"
+            })
+            return
+
+        set_task_status(task_id, {"status": "processing", "progress": "Performing semantic search..."})
+        
+        # Perform semantic search
+        search_results = rag_service.semantic_search(
+            request.query,
+            request.index_name,
+            embedding_model,
+            request.top_k,
+            request.kb_id,
+            request.filename_pattern,
+            request.hybrid_boost
+        )
+
+        set_task_status(task_id, {"status": "processing", "progress": "Generating response..."})
+        
+        # Generate response (background tasks always return complete responses)
+        response = rag_service.generate_response(request.query, search_results, llm_model)
+        
+        set_task_status(task_id, {
+            "status": "completed",
+            "response": response,
+            "sources": len(search_results['hits']['hits']),
+            "dataset": request.index_name,
+            "note": "Background tasks return complete responses. Use streaming endpoints for real-time token delivery."
+        })
+            
+    except Exception as e:
+        set_task_status(task_id, {
+            "status": "failed", 
+            "error": str(e)
+        })
+
 @app.get("/datasets")
 async def list_datasets():
     """List all available dataset indices with embeddings"""
@@ -384,8 +542,25 @@ async def list_datasets():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list datasets: {str(e)}")
 
+@app.get("/task/{task_id}")
+async def get_task_status_endpoint(task_id: str):
+    """Get the status of a background task"""
+    status = get_task_status_from_storage(task_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    return {
+        "task_id": task_id,
+        **status
+    }
+
+@app.get("/test/{param}")
+async def test_endpoint(param: str):
+    """Test endpoint"""
+    return {"param": param, "message": "Test successful", "timestamp": str(uuid.uuid4())}
+
 @app.post("/rag/generate")
-async def generate_rag_response(request: RAGRequest, stream: bool = True, format: str = "sse"):
+async def generate_rag_response(request: RAGRequest, background_tasks: BackgroundTasks):
     """
     Generate RAG response for a query
 
@@ -404,76 +579,101 @@ async def generate_rag_response(request: RAGRequest, stream: bool = True, format
     - **hybrid_boost**: Whether to use hybrid search combining semantic and keyword matching (default: true)
     - **stream**: Whether to stream the response (default: true)
     - **format**: Response format - "json" or "sse" (default: sse, only used when stream=true)
-    """
 
-    # Explicit validation for required fields (now handled by Pydantic)
+    When stream=true: Returns a task ID for tracking progress. Use GET /task/{task_id} to check status.
+    When stream=false: Returns immediate synchronous response.
+    """
+    # Basic validation
     if not request.query:
         raise HTTPException(status_code=400, detail="Query parameter is required")
     if not request.index_name:
         raise HTTPException(status_code=400, detail="index_name parameter is required")
 
-    # Use environment variables as defaults for optional parameters
-    embedding_server = request.embedding_server or os.getenv('EMBEDDING_HOST', os.getenv('OLLAMA_HOST', 'http://localhost:11434'))
-    llm_server = request.llm_server or os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-    dataset_server = request.dataset_server or os.getenv('ELASTICSEARCH_HOST', 'http://localhost:1200')
-    embedding_model = request.embedding_model or os.getenv('EMBEDDING_MODEL', 'bge-m3:latest')
-    llm_model = request.llm_model or os.getenv('LLM_MODEL', 'qwen3:32b')
-    es_username = request.es_username or os.getenv('ELASTIC_USERNAME', 'elastic')
-    es_password = request.es_password or os.getenv('ELASTICSEARCH_PASSWORD', 'infini_rag_flow')
+    # Handle streaming vs synchronous based on request.stream
+    if request.stream:
+        # Streaming mode: Use background tasks
+        task_id = str(uuid.uuid4())
 
-    # Connect to servers
-    rag_service.connect_embedding_server(embedding_server)
-    rag_service.connect_llm_server(llm_server)
-    rag_service.connect_dataset_server(dataset_server, es_username, es_password)
+        # Initialize task status
+        set_task_status(task_id, {
+            "status": "queued",
+            "message": "Request queued for processing"
+        })
 
-    # Validate the specified index
-    available_datasets = rag_service.list_available_datasets()
-    dataset_names = [d['index_name'] for d in available_datasets]
-    if request.index_name not in dataset_names:
-        available = ", ".join(dataset_names) if dataset_names else "none"
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Dataset index '{request.index_name}' not found or does not contain embeddings. Available datasets: {available}"
-        )
+        # Add background task
+        background_tasks.add_task(process_rag_request, task_id, request)
 
-    # Perform semantic search
-    search_results = rag_service.semantic_search(
-        request.query,
-        request.index_name,
-        embedding_model,
-        request.top_k,
-        request.kb_id,
-        request.filename_pattern,
-        request.hybrid_boost
-    )
-
-    if stream:
-        if format == "sse":
-            # Return Server-Sent Events streaming response
-            return StreamingResponse(
-                rag_service.generate_sse_stream(request.query, search_results, llm_model),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "Access-Control-Allow-Origin": "*",
-                }
-            )
-        else:
-            # Return raw text streaming response (your current implementation)
-            return StreamingResponse(
-                rag_service.generate_streaming_response(request.query, search_results, llm_model),
-                media_type="text/plain"
-            )
+        return {
+            "task_id": task_id,
+            "status": "processing",
+            "message": "Request has been queued for processing. Use GET /task/{task_id} to check status.",
+            "estimated_time": "10-30 seconds depending on query complexity"
+        }
     else:
-        # Return regular JSON response
-        response = rag_service.generate_response(request.query, search_results, llm_model)
-        return {"response": response, "sources": len(search_results['hits']['hits']), "dataset": request.index_name}
+        # Synchronous mode: Process immediately and return response
+        try:
+            # Use environment variables as defaults for optional parameters
+            embedding_server = request.embedding_server or os.getenv('EMBEDDING_HOST', os.getenv('OLLAMA_HOST', 'http://localhost:11434'))
+            llm_server = request.llm_server or os.getenv('OLLAMA_HOST', 'http://localhost:11434')
+            dataset_server = request.dataset_server or os.getenv('ELASTICSEARCH_HOST', 'http://localhost:1200')
+            embedding_model = request.embedding_model or os.getenv('EMBEDDING_MODEL', 'bge-m3:latest')
+            llm_model = request.llm_model or os.getenv('LLM_MODEL', 'qwen3:32b')
+            es_username = request.es_username or os.getenv('ELASTIC_USERNAME', 'elastic')
+            es_password = request.es_password or os.getenv('ELASTICSEARCH_PASSWORD', 'infini_rag_flow')
+
+            # Connect to servers
+            rag_service.connect_embedding_server(embedding_server)
+            rag_service.connect_llm_server(llm_server)
+            rag_service.connect_dataset_server(dataset_server, es_username, es_password)
+
+            # Validate the specified index
+            available_datasets = rag_service.list_available_datasets()
+            dataset_names = [d['index_name'] for d in available_datasets]
+            if request.index_name not in dataset_names:
+                available = ", ".join(dataset_names) if dataset_names else "none"
+                raise HTTPException(status_code=400, detail=f"Dataset index '{request.index_name}' not found or does not contain embeddings. Available datasets: {available}")
+
+            # Perform semantic search
+            search_results = rag_service.semantic_search(
+                request.query,
+                request.index_name,
+                embedding_model,
+                request.top_k,
+                request.kb_id,
+                request.filename_pattern,
+                request.hybrid_boost
+            )
+
+            # Generate response synchronously
+            response = rag_service.generate_response(request.query, search_results, llm_model)
+
+            return {
+                "response": response,
+                "sources": len(search_results['hits']['hits']) if search_results and 'hits' in search_results else 0,
+                "dataset": request.index_name,
+                "mode": "synchronous"
+            }
+
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Request processing failed: {str(e)}")
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "service": "RAG Web Service"}
+    all_tasks = get_all_task_statuses()
+    active_tasks = sum(1 for status in all_tasks.values() if status.get("status") in ["processing", "queued"])
+    completed_tasks = sum(1 for status in all_tasks.values() if status.get("status") == "completed")
+    failed_tasks = sum(1 for status in all_tasks.values() if status.get("status") == "failed")
+    
+    return {
+        "status": "healthy", 
+        "service": "RAG Web Service",
+        "active_tasks": active_tasks,
+        "completed_tasks": completed_tasks,
+        "failed_tasks": failed_tasks,
+        "total_tasks": len(all_tasks),
+        "storage_backend": "redis" if redis_client else "memory"
+    }
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
