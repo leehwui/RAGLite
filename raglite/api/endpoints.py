@@ -7,6 +7,7 @@ from typing import Dict, Tuple
 
 from raglite.core.rag_service import RAGService
 from raglite.api.models import RAGRequest
+from raglite.config.settings import settings as app_settings
 from raglite.storage.redis_store import set_task_status, get_task_status_from_storage, get_all_task_statuses, redis_client
 
 def _resolve_reranking_settings(request: RAGRequest) -> Tuple[str, str, int]:
@@ -34,13 +35,15 @@ def process_rag_request(task_id: str, request: RAGRequest):
         set_task_status(task_id, {"status": "processing", "progress": "Initializing..."})
 
         # Use environment variables as defaults for optional parameters
-        embedding_server = request.embedding_server or os.getenv('EMBEDDING_HOST', os.getenv('OLLAMA_HOST', 'http://localhost:11434'))
-        llm_server = request.llm_server or os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-        dataset_server = request.dataset_server or os.getenv('ELASTICSEARCH_HOST', 'http://localhost:1200')
-        embedding_model = request.embedding_model or os.getenv('EMBEDDING_MODEL', 'bge-m3:latest')
-        llm_model = request.llm_model or os.getenv('LLM_MODEL', 'qwen3:32b')
-        es_username = request.es_username or os.getenv('ELASTIC_USERNAME', 'elastic')
-        es_password = request.es_password or os.getenv('ELASTICSEARCH_PASSWORD', 'infini_rag_flow')
+    # Use app_settings and environment variable defaults for optional parameters
+        embedding_server = request.embedding_server or app_settings.embedding_host
+        llm_server = request.llm_server or app_settings.ollama_host
+        dataset_server = request.dataset_server or app_settings.elasticsearch_host
+        embedding_model = request.embedding_model or app_settings.embedding_model
+        llm_model = request.llm_model or app_settings.llm_model
+        include_thinking = request.include_thinking if request.include_thinking is not None else app_settings.include_thinking_default
+        es_username = request.es_username or app_settings.elasticsearch_username
+        es_password = request.es_password or app_settings.elasticsearch_password
 
         set_task_status(task_id, {"status": "processing", "progress": "Connecting to servers..."})
 
@@ -88,7 +91,7 @@ def process_rag_request(task_id: str, request: RAGRequest):
         set_task_status(task_id, {"status": "processing", "progress": "Generating response..."})
 
         # Generate response (background tasks always return complete responses)
-        response = rag_service.generate_response(request.query, search_results, llm_model)
+        response = rag_service.generate_response(request.query, search_results, llm_model, request.llm_num_predict, include_thinking)
 
         set_task_status(task_id, {
             "status": "completed",
@@ -106,11 +109,11 @@ def process_rag_request(task_id: str, request: RAGRequest):
 
 async def list_datasets():
     """List all available dataset indices with embeddings"""
-    # Connect to dataset server with environment variable defaults (same as standalone script)
+    # Connect to dataset server with app_settings defaults
     try:
-        dataset_server = os.getenv('ELASTICSEARCH_HOST', 'http://localhost:1200')
-        es_username = os.getenv('ELASTIC_USERNAME', 'elastic')
-        es_password = os.getenv('ELASTICSEARCH_PASSWORD', 'infini_rag_flow')
+        dataset_server = app_settings.elasticsearch_host
+        es_username = app_settings.elasticsearch_username
+        es_password = app_settings.elasticsearch_password
 
         rag_service.connect_dataset_server(dataset_server, es_username, es_password)
         datasets = rag_service.list_available_datasets()
@@ -188,14 +191,14 @@ async def generate_rag_response(request: RAGRequest, background_tasks: Backgroun
     else:
         # Synchronous mode: Process immediately and return response
         try:
-            # Use environment variables as defaults for optional parameters
-            embedding_server = request.embedding_server or os.getenv('EMBEDDING_HOST', os.getenv('OLLAMA_HOST', 'http://localhost:11434'))
-            llm_server = request.llm_server or os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-            dataset_server = request.dataset_server or os.getenv('ELASTICSEARCH_HOST', 'http://localhost:1200')
-            embedding_model = request.embedding_model or os.getenv('EMBEDDING_MODEL', 'bge-m3:latest')
-            llm_model = request.llm_model or os.getenv('LLM_MODEL', 'qwen3:32b')
-            es_username = request.es_username or os.getenv('ELASTIC_USERNAME', 'elastic')
-            es_password = request.es_password or os.getenv('ELASTICSEARCH_PASSWORD', 'infini_rag_flow')
+            # Use app_settings defaults
+            embedding_server = request.embedding_server or app_settings.embedding_host
+            llm_server = request.llm_server or app_settings.ollama_host
+            dataset_server = request.dataset_server or app_settings.elasticsearch_host
+            embedding_model = request.embedding_model or app_settings.embedding_model
+            llm_model = request.llm_model or app_settings.llm_model
+            es_username = request.es_username or app_settings.elasticsearch_username
+            es_password = request.es_password or app_settings.elasticsearch_password
 
             # Connect to servers
             rag_service.connect_embedding_server(embedding_server)
@@ -231,7 +234,8 @@ async def generate_rag_response(request: RAGRequest, background_tasks: Backgroun
             )
 
             # Generate response synchronously
-            response = rag_service.generate_response(request.query, search_results, llm_model)
+            include_thinking = request.include_thinking if request.include_thinking is not None else app_settings.include_thinking_default
+            response = rag_service.generate_response(request.query, search_results, llm_model, request.llm_num_predict, include_thinking)
 
             return {
                 "response": response,

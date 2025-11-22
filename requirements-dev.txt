@@ -1,0 +1,5 @@
+# Development / Testing Dependencies
+pytest==7.4.2
+pytest-asyncio==0.22.0
+requests==2.32.5  # used in some tests
+httpx==0.24.0  # optional, used for async HTTP testing (if needed)

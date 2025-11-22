@@ -32,3 +32,5 @@ class RAGRequest(BaseModel):
         le=20,
         description="Number of documents to rerank (defaults to top_k)",
     )
+    llm_num_predict: Optional[int] = Field(None, ge=1, description="Optional override for number of tokens (predictions) to request from the LLM")
+    include_thinking: Optional[bool] = Field(None, description="Whether to include 'thinking' (chain-of-thought) tokens in streaming responses. False by default.")

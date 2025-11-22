@@ -35,7 +35,7 @@ We ensure high quality and timely delivery for all our products.
 ]
 
 # List of embedding models to test (assuming they are available in Ollama)
-models = ['qwen3-embedding:8b', 'bge-m3:latest', 'shaw/dmeta-embedding-zh:latest']
+models = ['qwen3-embedding:8b', 'qwen3-embedding:4b', 'shaw/dmeta-embedding-zh:latest']
 
 for test_case in test_cases:
     language = test_case['language']

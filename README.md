@@ -174,6 +174,12 @@ curl -X POST "http://localhost:8000/rag/generate" \
     "top_k": 3,
     "kb_id": "specific-kb-id",              // Optional: filter by knowledge base
     "filename_pattern": "*.xlsx"            // Optional: filter by filename pattern
+
+  Add the following optional parameter to control whether chain-of-thought tokens are included in the SSE stream:
+
+  ```json
+    "include_thinking": false,   // Optional: Whether to include 'thinking' (chain-of-thought) tokens in SSE streaming; defaults to the environment setting
+  ```
   }'
 ```
 
@@ -431,7 +437,7 @@ curl -X POST "http://localhost:8000/rag/generate" \
     "embedding_server": "http://localhost:11434",
     "llm_server": "http://localhost:11434",
     "dataset_server": "http://localhost:1200",
-    "embedding_model": "bge-m3:latest",
+  "embedding_model": "qwen3-embedding:4b",
     "llm_model": "qwen3:32b",
     "es_username": "elastic",
     "es_password": "infini_rag_flow",
@@ -449,8 +455,10 @@ curl -X POST "http://localhost:8000/rag/generate" \
 | `ELASTIC_USERNAME` | `elastic` | Elasticsearch username |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL for LLM generation |
 | `EMBEDDING_HOST` | `OLLAMA_HOST` | Ollama server URL for embeddings (defaults to same as OLLAMA_HOST) |
-| `EMBEDDING_MODEL` | `bge-m3:latest` | Default embedding model name |
+| `EMBEDDING_MODEL` | `qwen3-embedding:4b` | Default embedding model name |
 | `LLM_MODEL` | `qwen3:32b` | Default LLM model name |
+| `LLM_NUM_PREDICT` | `512` | Default number of tokens (predictions) to request from the LLM; increase this if streaming results are truncated |
+| `INCLUDE_THINKING` | `false` | Default behavior whether to include 'thinking' (chain-of-thought) token streams in SSE responses |
 
 ### API Parameters Reference
 
@@ -463,7 +471,7 @@ All API parameters are **optional** except `query` and `index_name` - they overr
   "embedding_server": "http://localhost:11434",  // Optional: Ollama embedding server URL
   "llm_server": "http://localhost:11434",        // Optional: Ollama LLM server URL
   "dataset_server": "http://localhost:1200",     // Optional: Elasticsearch server URL
-  "embedding_model": "bge-m3:latest",             // Optional: Embedding model name
+  "embedding_model": "qwen3-embedding:4b",             // Optional: Embedding model name
   "llm_model": "qwen3:32b",                        // Optional: LLM model name
   "es_username": "elastic",                        // Optional: Elasticsearch username
   "es_password": "your_password",                  // Optional: Elasticsearch password

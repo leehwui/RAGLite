@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import uvicorn
+import logging
 import os
 import uuid
 import json
@@ -15,9 +16,10 @@ from raglite.api.endpoints import (
     health_check,
     rag_service  # Import the global RAGService instance
 )
+from raglite.config.settings import settings as app_settings
 from raglite.api.models import RAGRequest
 
-app = FastAPI(title="RAG Web Service", description="Retrieval-Augmented Generation API", version="0.2.0")
+app = FastAPI(title="RAG Web Service", description="Retrieval-Augmented Generation API", version="0.2.1")
 
 # CORS configuration: allow origins used by the frontend (comma-separated env var)
 allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
@@ -89,14 +91,14 @@ async def stream_rag_response_post(request: RAGRequest):
     - **reranker_top_k**: Number of docs for reranker to consider
     """
     try:
-        # Use environment variables as defaults
-        embedding_server = request.embedding_server or os.getenv('EMBEDDING_HOST', os.getenv('OLLAMA_HOST', 'http://localhost:11434'))
-        llm_server = request.llm_server or os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-        dataset_server = request.dataset_server or os.getenv('ELASTICSEARCH_HOST', 'http://localhost:1200')
-        embedding_model = request.embedding_model or os.getenv('EMBEDDING_MODEL', 'qwen3-embedding:4b')
-        llm_model = request.llm_model or os.getenv('LLM_MODEL', 'qwen3:32b')
-        es_username = request.es_username or os.getenv('ELASTIC_USERNAME', 'elastic')
-        es_password = request.es_password or os.getenv('ELASTICSEARCH_PASSWORD', 'infini_rag_flow')
+        # Use app_settings defaults
+        embedding_server = request.embedding_server or app_settings.embedding_host
+        llm_server = request.llm_server or app_settings.ollama_host
+        dataset_server = request.dataset_server or app_settings.elasticsearch_host
+        embedding_model = request.embedding_model or app_settings.embedding_model
+        llm_model = request.llm_model or app_settings.llm_model
+        es_username = request.es_username or app_settings.elasticsearch_username
+        es_password = request.es_password or app_settings.elasticsearch_password
 
         # Connect to servers (use the global rag_service instance)
         rag_service.connect_embedding_server(embedding_server)
@@ -135,9 +137,12 @@ async def stream_rag_response_post(request: RAGRequest):
             reranker_top_k
         )
 
+        # Determine include_thinking for streaming output
+        include_thinking = request.include_thinking if request.include_thinking is not None else app_settings.include_thinking_default
+
         # Stream the response
         return StreamingResponse(
-            rag_service.generate_sse_stream(request.query, search_results, llm_model),
+            rag_service.generate_sse_stream(request.query, search_results, llm_model, request.llm_num_predict, include_thinking),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
         )
@@ -157,6 +162,8 @@ async def stream_rag_response(
     reranker_type: str = None,
     reranker_model: str = None,
     reranker_top_k: int = None
+    , llm_num_predict: int = None
+    , include_thinking: bool = None
 ):
     """
     Stream RAG response for a query (GET endpoint for frontend compatibility)
@@ -173,14 +180,14 @@ async def stream_rag_response(
     - **reranker_top_k**: Number of docs for reranker to consider
     """
     try:
-        # Use environment variables as defaults
-        embedding_server = os.getenv('EMBEDDING_HOST', os.getenv('OLLAMA_HOST', 'http://localhost:11434'))
-        llm_server = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-        dataset_server = os.getenv('ELASTICSEARCH_HOST', 'http://localhost:1200')
-        embedding_model = embedding_model or os.getenv('EMBEDDING_MODEL', 'qwen3-embedding:4b')
-        llm_model = llm_model or os.getenv('LLM_MODEL', 'qwen3:32b')
-        es_username = os.getenv('ELASTIC_USERNAME', 'elastic')
-        es_password = os.getenv('ELASTICSEARCH_PASSWORD', 'infini_rag_flow')
+        # Use app_settings defaults
+        embedding_server = os.getenv('EMBEDDING_HOST', app_settings.embedding_host)
+        llm_server = os.getenv('OLLAMA_HOST', app_settings.ollama_host)
+        dataset_server = os.getenv('ELASTICSEARCH_HOST', app_settings.elasticsearch_host)
+        embedding_model = embedding_model or app_settings.embedding_model
+        llm_model = llm_model or app_settings.llm_model
+        es_username = os.getenv('ELASTIC_USERNAME', app_settings.elasticsearch_username)
+        es_password = os.getenv('ELASTICSEARCH_PASSWORD', app_settings.elasticsearch_password)
 
         # Connect to servers (use the global rag_service instance)
         rag_service.connect_embedding_server(embedding_server)
@@ -219,9 +226,12 @@ async def stream_rag_response(
             reranker_top_k
         )
 
+        # Determine include_thinking for streaming
+        include_thinking = include_thinking if include_thinking is not None else app_settings.include_thinking_default
+
         # Stream the response
         return StreamingResponse(
-            rag_service.generate_sse_stream(query, search_results, llm_model),
+            rag_service.generate_sse_stream(query, search_results, llm_model, llm_num_predict, include_thinking),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
         )
@@ -245,8 +255,13 @@ if __name__ == "__main__":
        \ \__\\ _\\ \__\ \__\ \_______\ \_______\ \__\   \ \__\ \ \_______\
         \|__|\|__|\|__|\|__|\|_______|\|_______|\|__|    \|__|  \|_______|
     """
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger('raglite')
     print(banner)
-    port = int(os.getenv("PORT", 8000))
-    print(f"Starting RAG Web Service on port {port}")
-    print("API Documentation available at: http://localhost:{port}/docs")
+    port = int(os.getenv("PORT", app_settings.port))
+    logger.info(f"Starting RAG Web Service on port {port}")
+    # Print selected models/hosts for debugging when service starts
+    logger.info(f"Using embedding_model={app_settings.embedding_model}, llm_model={app_settings.llm_model}, llm_num_predict={app_settings.llm_num_predict}")
+    logger.info(f"Using hosts: embedding_host={app_settings.embedding_host}, ollama_host={app_settings.ollama_host}, elasticsearch_host={app_settings.elasticsearch_host}")
+    logger.info(f"API Documentation available at: http://localhost:{port}/docs")
     uvicorn.run(app, host="0.0.0.0", port=port)

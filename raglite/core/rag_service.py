@@ -7,6 +7,7 @@ import os
 import json
 import logging
 from raglite.core.reranking import get_reranker
+from raglite.config.settings import settings as app_settings
 
 class RAGService:
     def __init__(self):
@@ -192,7 +193,7 @@ class RAGService:
             logger.error(f"Reranking failed: {e}")
             return search_results
 
-    def generate_response(self, query: str, search_results, llm_model: str):
+    def generate_response(self, query: str, search_results, llm_model: str, llm_num_predict: Optional[int] = None, include_thinking: bool = False):
         """Generate response using LLM with retrieved context"""
         if not search_results or 'hits' not in search_results or not search_results['hits']['hits']:
             return "No relevant information found for your query."
@@ -232,16 +233,50 @@ class RAGService:
                 options={
                     "temperature": 0.1,
                     "top_p": 0.9,
-                    "num_predict": 512
+                    "num_predict": llm_num_predict or app_settings.llm_num_predict
                 }
             )
 
-            return response['response']
+            # Some LLMs return the final text in 'response', others use 'thinking'.
+            # Prefer 'response' when available, but fall back to 'thinking' if empty.
+            try:
+                    resp_text = ''
+                    # Prefer 'response' first
+                    if hasattr(response, 'response') and response.response:
+                        resp_text = response.response
+                    elif isinstance(response, dict) and response.get('response'):
+                        resp_text = response.get('response')
+                    # If response is empty, fall back to 'thinking' only when requested
+                    elif include_thinking and hasattr(response, 'thinking') and response.thinking:
+                        resp_text = response.thinking
+                    elif include_thinking and isinstance(response, dict) and response.get('thinking'):
+                        resp_text = response.get('thinking')
+                    else:
+                        resp_text = ''
+
+                    # Log done_reason if available for diagnostics (e.g., length truncation)
+                    try:
+                        done_reason = getattr(response, 'done_reason', None) or response.get('done_reason') if isinstance(response, dict) else None
+                        if done_reason:
+                            logging.getLogger(__name__).info(f"LLM generate done_reason={done_reason}")
+                    except Exception:
+                        pass
+
+                    return resp_text
+            except Exception:
+                    # Fallback if the object doesn't support attributes
+                    if isinstance(response, dict):
+                        if response.get('response'):
+                            return response.get('response')
+                        if include_thinking and response.get('thinking'):
+                            return response.get('thinking')
+                        return ''
+                    return str(response)
 
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"LLM generation failed: {str(e)}")
 
-    async def generate_streaming_response(self, query: str, search_results, llm_model: str):
+    async def generate_streaming_response(self, query: str, search_results, llm_model: str, llm_num_predict: Optional[int] = None, include_thinking: bool = False):
         """Generate streaming response using LLM with retrieved context"""
         if not search_results or 'hits' not in search_results or not search_results['hits']['hits']:
             yield "No relevant information found for your query."
@@ -280,22 +315,33 @@ class RAGService:
                 options={
                     "temperature": 0.1,
                     "top_p": 0.9,
-                    "num_predict": 512
+                    "num_predict": llm_num_predict or app_settings.llm_num_predict
                 },
                 stream=True
             )
 
+            # Use a buffer to aggregate small token chunks into larger messages
+            token_buffer = ''
+            last_timestamp = ''
             for chunk in stream:
                 if 'response' in chunk:
                     yield chunk['response']
                 elif 'thinking' in chunk:
                     # Also yield thinking tokens for models that use thinking field
-                    yield chunk['thinking']
+                    if include_thinking:
+                        yield chunk['thinking']
+                # Log done_reason if present
+                try:
+                    if isinstance(chunk, dict) and chunk.get('done'):
+                        done_reason = chunk.get('done_reason') or chunk.get('reason')
+                        logging.getLogger(__name__).info(f"LLM streaming done_reason={done_reason}")
+                except Exception:
+                    pass
 
         except Exception as e:
             yield f"Error during generation: {str(e)}"
 
-    async def generate_sse_stream(self, query: str, search_results, llm_model: str):
+    async def generate_sse_stream(self, query: str, search_results, llm_model: str, llm_num_predict: Optional[int] = None, include_thinking: bool = False):
         """Generate Server-Sent Events (SSE) streaming response"""
         # Send initial event with search results info
         sources_count = len(search_results['hits']['hits']) if search_results and 'hits' in search_results else 0
@@ -303,7 +349,8 @@ class RAGService:
 
         if not search_results or 'hits' not in search_results or not search_results['hits']['hits']:
             yield f"event: message\ndata: No relevant information found for your query.\n\n"
-            yield f"event: end\ndata: [DONE]\n\n"
+            end_payload = {'done_reason': None, 'truncated': False}
+            yield f"event: end\ndata: {json.dumps(end_payload)}\n\n"
             return
 
         # Extract top retrieved documents
@@ -331,6 +378,12 @@ class RAGService:
 
 请基于上述信息提供准确、有用的回答。如果信息不足以完全回答问题，请说明。"""
 
+        # Buffer initialization moved outside try for robust scoping
+        token_buffer = ''
+        buffer_source = None
+        last_timestamp = ''
+        last_done_reason = None
+        last_source = None
         try:
             # Use streaming generation
             stream = self.llm_client.generate(
@@ -339,30 +392,96 @@ class RAGService:
                 options={
                     "temperature": 0.1,
                     "top_p": 0.9,
-                    "num_predict": 512
+                    "num_predict": llm_num_predict or app_settings.llm_num_predict
                 },
                 stream=True
             )
 
             for chunk in stream:
-                if 'response' in chunk:
-                    # Send each token as an SSE message event
-                    token_data = json.dumps({
-                        'token': chunk['response'],
-                        'timestamp': chunk.get('created_at', '')
-                    })
-                    yield f"event: token\ndata: {token_data}\n\n"
-                elif 'thinking' in chunk:
-                    # Also send thinking tokens
-                    token_data = json.dumps({
-                        'token': chunk['thinking'],
-                        'type': 'thinking',
-                        'timestamp': chunk.get('created_at', '')
-                    })
-                    yield f"event: token\ndata: {token_data}\n\n"
+                # Debug: print chunk keys so we can inspect streaming structure
+                try:
+                    logging.getLogger(__name__).debug(f"LLM chunk keys={list(chunk.keys())} len_response={len(chunk.get('response','')) if 'response' in chunk else 0} len_thinking={len(chunk.get('thinking','')) if 'thinking' in chunk else 0}")
+                except Exception:
+                    logging.getLogger(__name__).debug(f"LLM chunk (non-mapping)={chunk}")
 
-            # Send completion event
-            yield f"event: end\ndata: [DONE]\n\n"
+                # Prefer response tokens, fallback to thinking
+                token_text = ''
+                token_source = 'unknown'
+                if 'response' in chunk and chunk.get('response'):
+                    token_text = str(chunk.get('response')).strip()
+                    token_source = 'response'
+                elif 'thinking' in chunk and chunk.get('thinking'):
+                    token_text = str(chunk.get('thinking')).strip()
+                    token_source = 'thinking'
+
+                # If thinking tokens are not requested, skip them in streaming
+                if token_source == 'thinking' and not include_thinking:
+                    continue
+
+                # Skip empty tokens to avoid spamming the frontend
+                if not token_text:
+                    continue
+
+                # If the token source changed, flush existing buffer first
+                if buffer_source and token_source != buffer_source and token_buffer:
+                    token_data = json.dumps({
+                        'token': token_buffer,
+                        'timestamp': last_timestamp,
+                        'source': buffer_source
+                    }, ensure_ascii=False)
+                    logging.getLogger(__name__).debug(f"SSE token flush: {token_data}")
+                    yield f"event: token\ndata: {token_data}\n\n"
+                    token_buffer = ''
+                    last_timestamp = ''
+                    buffer_source = None
+
+                # Aggregate into buffer
+                token_buffer += token_text
+                buffer_source = token_source
+                last_source = token_source
+                last_timestamp = chunk.get('created_at', '')
+
+                # If buffer is long enough or token ends with a sentence terminator, flush it
+                # Chinese sentence terminators: 。！？, include ascii punctuation .!? as well
+                terminators = ('。', '！', '？', '.', '!', '?')
+                if (len(token_buffer) >= 32) or (token_text.endswith(terminators)):
+                    token_data = json.dumps({
+                        'token': token_buffer,
+                        'timestamp': last_timestamp,
+                        'source': buffer_source
+                    }, ensure_ascii=False)
+                    logging.getLogger(__name__).debug(f"SSE token terminator flush: {token_data}")
+                    yield f"event: token\ndata: {token_data}\n\n"
+                    token_buffer = ''
+                    last_timestamp = ''
+
+                # Log done_reason if present and update last_done_reason
+                try:
+                    if isinstance(chunk, dict) and chunk.get('done'):
+                        done_reason = chunk.get('done_reason') or chunk.get('reason')
+                        last_done_reason = done_reason
+                        logging.getLogger(__name__).info(f"LLM streaming done_reason={done_reason}")
+                except Exception:
+                    pass
+
+            # Flush any remaining buffered tokens before ending
+            if token_buffer:
+                token_data = json.dumps({
+                    'token': token_buffer,
+                    'timestamp': last_timestamp
+                    ,
+                    'source': buffer_source
+                }, ensure_ascii=False)
+                logging.getLogger(__name__).debug(f"SSE token final flush: {token_data}")
+                yield f"event: token\ndata: {token_data}\n\n"
+
+            # Build end payload including done_reason and truncated flag for the client
+            end_payload = {
+                'done_reason': last_done_reason,
+                'truncated': last_done_reason == 'length' if last_done_reason else False,
+                'final_source': last_source
+            }
+            yield f"event: end\ndata: {json.dumps(end_payload)}\n\n"
 
         except Exception as e:
             error_data = json.dumps({'error': str(e)})

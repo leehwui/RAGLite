@@ -17,8 +17,13 @@ class Settings:
     embedding_host: str = os.getenv('EMBEDDING_HOST', ollama_host)  # Default to same as OLLAMA_HOST
 
     # Model configuration
-    embedding_model: str = os.getenv('EMBEDDING_MODEL', 'bge-m3:latest')
+    # Default to qwen3-embedding:4b for embeddings to match project common setup
+    embedding_model: str = os.getenv('EMBEDDING_MODEL', 'qwen3-embedding:4b')
     llm_model: str = os.getenv('LLM_MODEL', 'qwen3:32b')
+    # Number of tokens (predictions) to request from the LLM; set via LLM_NUM_PREDICT
+    llm_num_predict: int = int(os.getenv('LLM_NUM_PREDICT', '512'))
+    # Include chain-of-thought (thinking) tokens in streaming by default?  (set False to hide)
+    include_thinking_default: bool = str(os.getenv('INCLUDE_THINKING', 'false')).lower() in ('1', 'true', 'yes')
 
     # Redis configuration
     redis_host: str = os.getenv('REDIS_HOST', 'localhost')
