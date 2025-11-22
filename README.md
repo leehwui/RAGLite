@@ -350,6 +350,24 @@ curl -X POST "http://localhost:8000/rag/generate" \
 - 🔍 **Precision**: Combines semantic understanding with exact keyword matching
 - 📊 **Flexibility**: Can be enabled/disabled per query
 
+## ⚡ Reranking & Hugging Face Mirrors
+
+When you enable reranking via the `reranker_type` field, RAGLite reorders Elasticsearch hits using a SentenceTransformers cross-encoder (default: `cross-encoder/ms-marco-MiniLM-L-6-v2`). Configure reranking with the following environment variables or request fields:
+
+| Setting | Description |
+| --- | --- |
+| `RERANKER_TYPE` | `cross_encoder` to apply a reranker, `none` to skip it. API requests can override using `reranker_type`. |
+| `RERANKER_MODEL` | Override the HuggingFace model used for scoring (`cross-encoder/ms-marco-MiniLM-L-6-v2` by default). |
+| `RERANKER_TOP_K` | How many hits to rerank before slicing to `top_k`. Defaults to the `top_k` request value. |
+
+Because the cross-encoder downloads weights from HuggingFace, developers operating behind restricted networks (e.g., within China) should point to a local mirror using:
+
+```
+HUGGINGFACE_HUB_ENDPOINT=https://huggingface.cdn.jsdelivr.net/  # or another mirror you control
+```
+
+This environment variable is read before the cross-encoder loads and ensures the reranker pulls weights from an accessible endpoint.
+
 ## ⚙️ Configuration
 
 ### Hybrid Configuration Approach (Recommended)

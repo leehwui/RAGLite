@@ -4,6 +4,9 @@ import numpy as np
 from elasticsearch import Elasticsearch
 from typing import Optional, Dict, Any
 import os
+import json
+import logging
+from raglite.core.reranking import get_reranker
 
 class RAGService:
     def __init__(self):
@@ -102,28 +105,30 @@ class RAGService:
         return None
 
     def semantic_search(self, query_string: str, index_name: str, embedding_model: str, size: int = 3, kb_id: Optional[str] = None, filename_pattern: Optional[str] = None, hybrid_boost: bool = True):
-        """Perform semantic search using embeddings - EXACT REPLICATION of standalone script"""
-        # Check for 1024-dim embedding field (same as standalone script)
+        """Perform semantic search using embeddings"""
+        # Check for dense_vector embedding fields (more flexible than hardcoding dims)
         try:
             mapping = self.es_client.indices.get_mapping(index=index_name)
             properties = mapping[index_name]['mappings']['properties']
 
-            # Look for 1024-dim embedding field for bge-m3 (same logic as standalone)
+            # Look for dense_vector field, prioritizing common dimensions for qwen3-embedding:4b (2560)
             embedding_field = None
-            for field_name in ['q_1024_vec', 'embedding', 'vector']:
+            embedding_dims = None
+            for field_name in ['q_2560_vec', 'q_1024_vec', 'embedding', 'q_4096_vec', 'vector']:
                 if field_name in properties:
                     field_mapping = properties[field_name]
-                    if field_mapping.get('type') == 'dense_vector' and field_mapping.get('dims') == 1024:
+                    if field_mapping.get('type') == 'dense_vector':
                         embedding_field = field_name
+                        embedding_dims = field_mapping.get('dims')
                         break
 
             if not embedding_field:
-                raise HTTPException(status_code=400, detail=f"No 1024-dimensional dense_vector embedding field found in index '{index_name}'. Make sure your documents are indexed with bge-m3 embeddings")
+                raise HTTPException(status_code=400, detail=f"No dense_vector embedding field found in index '{index_name}'. Make sure your documents are indexed with embeddings")
 
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to check mapping: {str(e)}")
 
-        # Build filters for prefiltering (same as standalone)
+        # Build filters for prefiltering
         filters = [{"exists": {"field": embedding_field}}]  # Always require embedding field
         if kb_id:
             filters.append({"term": {"kb_id": kb_id}})
@@ -138,11 +143,14 @@ class RAGService:
         if query_embedding is None:
             raise HTTPException(status_code=500, detail="Failed to generate query embedding")
 
+        # Check if embedding dimensions match
+        if len(query_embedding) != embedding_dims:
+            raise HTTPException(status_code=400, detail=f"Embedding model '{embedding_model}' produces {len(query_embedding)}-dimensional vectors, but index '{index_name}' has {embedding_dims}-dimensional vectors. Re-index with matching embeddings.")
+
         # Convert to list for Elasticsearch
         query_embedding = query_embedding.tolist()
 
-        # ORIGINAL SIMPLE APPROACH - EXACT REPLICATION (same as standalone)
-        # Just pure cosine similarity with match_all - no filters, no boosting
+        # Pure cosine similarity search
         search_body = {
             "size": size,
             "_source": True,
@@ -162,6 +170,27 @@ class RAGService:
             return search_result
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Semantic search failed: {str(e)}")
+
+    def rerank_search_results(self, query_string: str, search_results: Dict[str, Any], reranker_type: str, reranker_model: Optional[str], reranker_top_k: int):
+        """Apply a reranker to the search hits before generation"""
+        if not search_results or 'hits' not in search_results:
+            return search_results
+
+        hits = search_results['hits'].get('hits', [])
+        if not hits:
+            return search_results
+
+        reranker = get_reranker(reranker_type or "cross_encoder", model_name=reranker_model)
+        rerank_size = reranker_top_k or len(hits)
+
+        try:
+            reranked_hits = reranker.rerank(query_string, hits, top_k=rerank_size)
+            search_results['hits']['hits'] = reranked_hits
+            return search_results
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"Reranking failed: {e}")
+            return search_results
 
     def generate_response(self, query: str, search_results, llm_model: str):
         """Generate response using LLM with retrieved context"""

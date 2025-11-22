@@ -18,3 +18,17 @@ class RAGRequest(BaseModel):
     # Streaming / response format preferences (optional)
     stream: bool = Field(True, description="Whether to stream the response (default: true)")
     format: str = Field("sse", description='Response format: "json" or "sse" (default: sse)')
+    reranker_type: Optional[str] = Field(
+        None,
+        description='Optional reranker to apply to search hits ("cross_encoder" or "none", defaults to the configured value)',
+    )
+    reranker_model: Optional[str] = Field(
+        None,
+        description='Optional HuggingFace cross-encoder model override (e.g., "cross-encoder/ms-marco-MiniLM-L-6-v2")',
+    )
+    reranker_top_k: Optional[int] = Field(
+        None,
+        ge=1,
+        le=20,
+        description="Number of documents to rerank (defaults to top_k)",
+    )

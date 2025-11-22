@@ -3,11 +3,27 @@ from fastapi.responses import StreamingResponse
 import os
 import uuid
 import json
-from typing import Dict
+from typing import Dict, Tuple
 
 from raglite.core.rag_service import RAGService
 from raglite.api.models import RAGRequest
 from raglite.storage.redis_store import set_task_status, get_task_status_from_storage, get_all_task_statuses, redis_client
+
+def _resolve_reranking_settings(request: RAGRequest) -> Tuple[str, str, int]:
+    reranker_type = request.reranker_type or os.getenv('RERANKER_TYPE', 'cross_encoder')
+    reranker_model = request.reranker_model or os.getenv('RERANKER_MODEL', 'cross-encoder/ms-marco-MiniLM-L-6-v2')
+    env_top_k = os.getenv('RERANKER_TOP_K')
+    if request.reranker_top_k:
+        reranker_top_k = request.reranker_top_k
+    elif env_top_k:
+        try:
+            reranker_top_k = int(env_top_k)
+        except ValueError:
+            reranker_top_k = request.top_k
+    else:
+        reranker_top_k = request.top_k
+
+    return reranker_type, reranker_model, reranker_top_k
 
 # Global service instance
 rag_service = RAGService()
@@ -48,6 +64,8 @@ def process_rag_request(task_id: str, request: RAGRequest):
 
         set_task_status(task_id, {"status": "processing", "progress": "Performing semantic search..."})
 
+        reranker_type, reranker_model, reranker_top_k = _resolve_reranking_settings(request)
+
         # Perform semantic search
         search_results = rag_service.semantic_search(
             request.query,
@@ -57,6 +75,14 @@ def process_rag_request(task_id: str, request: RAGRequest):
             request.kb_id,
             request.filename_pattern,
             request.hybrid_boost
+        )
+
+        search_results = rag_service.rerank_search_results(
+            request.query,
+            search_results,
+            reranker_type,
+            reranker_model,
+            reranker_top_k
         )
 
         set_task_status(task_id, {"status": "processing", "progress": "Generating response..."})
@@ -126,6 +152,9 @@ async def generate_rag_response(request: RAGRequest, background_tasks: Backgroun
     - **hybrid_boost**: Whether to use hybrid search combining semantic and keyword matching (default: true)
     - **stream**: Whether to stream the response (default: true)
     - **format**: Response format - "json" or "sse" (default: sse, only used when stream=true)
+    - **reranker_type**: Specify a reranker ("cross_encoder" or "none"), defaults to environment setting
+    - **reranker_model**: Optional HuggingFace cross-encoder model override
+    - **reranker_top_k**: Number of documents that reranker should consider (defaults to top_k)
 
     When stream=true: Returns a task ID for tracking progress. Use GET /task/{task_id} to check status.
     When stream=false: Returns immediate synchronous response.
@@ -180,6 +209,8 @@ async def generate_rag_response(request: RAGRequest, background_tasks: Backgroun
                 available = ", ".join(dataset_names) if dataset_names else "none"
                 raise HTTPException(status_code=400, detail=f"Dataset index '{request.index_name}' not found or does not contain embeddings. Available datasets: {available}")
 
+            reranker_type, reranker_model, reranker_top_k = _resolve_reranking_settings(request)
+
             # Perform semantic search
             search_results = rag_service.semantic_search(
                 request.query,
@@ -189,6 +220,14 @@ async def generate_rag_response(request: RAGRequest, background_tasks: Backgroun
                 request.kb_id,
                 request.filename_pattern,
                 request.hybrid_boost
+            )
+
+            search_results = rag_service.rerank_search_results(
+                request.query,
+                search_results,
+                reranker_type,
+                reranker_model,
+                reranker_top_k
             )
 
             # Generate response synchronously
