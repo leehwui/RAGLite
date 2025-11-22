@@ -384,6 +384,7 @@ class RAGService:
         last_timestamp = ''
         last_done_reason = None
         last_source = None
+        token_seq = 1
         try:
             # Use streaming generation
             stream = self.llm_client.generate(
@@ -430,6 +431,11 @@ class RAGService:
                         'source': buffer_source
                     }, ensure_ascii=False)
                     logging.getLogger(__name__).debug(f"SSE token flush: {token_data}")
+                    # Attach sequence number for token events
+                    token_obj = json.loads(token_data)
+                    token_obj['seq'] = token_seq
+                    token_seq += 1
+                    token_data = json.dumps(token_obj, ensure_ascii=False)
                     yield f"event: token\ndata: {token_data}\n\n"
                     token_buffer = ''
                     last_timestamp = ''
@@ -451,6 +457,10 @@ class RAGService:
                         'source': buffer_source
                     }, ensure_ascii=False)
                     logging.getLogger(__name__).debug(f"SSE token terminator flush: {token_data}")
+                    token_obj = json.loads(token_data)
+                    token_obj['seq'] = token_seq
+                    token_seq += 1
+                    token_data = json.dumps(token_obj, ensure_ascii=False)
                     yield f"event: token\ndata: {token_data}\n\n"
                     token_buffer = ''
                     last_timestamp = ''
@@ -472,6 +482,10 @@ class RAGService:
                     ,
                     'source': buffer_source
                 }, ensure_ascii=False)
+                token_obj = json.loads(token_data)
+                token_obj['seq'] = token_seq
+                token_seq += 1
+                token_data = json.dumps(token_obj, ensure_ascii=False)
                 logging.getLogger(__name__).debug(f"SSE token final flush: {token_data}")
                 yield f"event: token\ndata: {token_data}\n\n"
 

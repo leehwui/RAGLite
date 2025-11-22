@@ -180,6 +180,33 @@ curl -X POST "http://localhost:8000/rag/generate" \
   ```json
     "include_thinking": false,   // Optional: Whether to include 'thinking' (chain-of-thought) tokens in SSE streaming; defaults to the environment setting
   ```
+
+  ### SSE (Server-Sent Events) Payloads
+
+  When `stream=true` and `format="sse"`, the API returns an SSE stream with several event types. Token events include a `seq` field to help clients order and deduplicate tokens.
+
+  - event: search_complete
+    - Data: {"sources": <int>} — number of retrieved context documents
+
+  - event: token
+    - Data (JSON):
+      {
+        "token": "string",         // aggregated streamed token text
+        "timestamp": "<iso timestamp>",
+        "source": "response|thinking|unknown", // token source
+        "seq": <int>                // sequential token identifier starting at 1 for each stream
+      }
+
+  - event: message
+    - Data: plain string for informational messages
+
+  - event: end
+    - Data (JSON): {"done_reason": <string|null>, "truncated": <bool>, "final_source": <string|null>}
+
+  - event: error
+    - Data (JSON): {"error": "message"}
+
+  Client note: The `seq` field is monotonically increasing for each emitted `token` event and starts at 1 for every request; it only increments for emitted tokens (i.e., skipped `thinking` tokens do not create gaps). Use `seq` for deterministic ordering, deduping, or reassembly when tokens are aggregated or delivered in rapid succession.
   }'
 ```
 

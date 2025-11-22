@@ -1,5 +1,8 @@
 import json
 import asyncio
+import os, sys
+import re
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from raglite.core.rag_service import RAGService
 
@@ -41,6 +44,11 @@ def test_generate_sse_stream_skips_thinking():
         assert 'thinking1' not in data
         assert 'thinking2' not in data
         assert 'Hello world.' in data
+        # Validate seq numbers are present and contiguous for emitted tokens
+        seq_matches = re.findall(r'event: token\ndata: (\{.*?\})\n\n', data, flags=re.S)
+        token_objs = [json.loads(s) for s in seq_matches]
+        seqs = [int(o['seq']) for o in token_objs]
+        assert seqs == list(range(1, len(seqs) + 1))
 
     asyncio.run(run_test())
 
@@ -62,5 +70,10 @@ def test_generate_sse_stream_includes_thinking():
         data = ''.join(collected)
         assert 'thinking1' in data
         assert 'Hello world.' in data
+        # Validate seq numbers
+        seq_matches = re.findall(r'event: token\ndata: (\{.*?\})\n\n', data, flags=re.S)
+        token_objs = [json.loads(s) for s in seq_matches]
+        seqs = [int(o['seq']) for o in token_objs]
+        assert seqs == list(range(1, len(seqs) + 1))
 
     asyncio.run(run_test())

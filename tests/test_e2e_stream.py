@@ -95,6 +95,10 @@ def test_e2e_sse_excludes_thinking(monkeypatch):
     assert 'thinking chunk 1' not in all_text
     assert 'response part 1' in all_text
     assert 'event: end' not in all_text  # We assert that 'end' payload is not present verbatim in data because SSE uses an 'end' event; parse above returns 'end' event separately
+    # validate seq numbers in token events: contiguous and starting at 1
+    token_events = [json.loads(d) for e, d in events if e == 'token']
+    seqs = [int(t['seq']) for t in token_events]
+    assert seqs == list(range(1, len(seqs) + 1))
 
 
 def test_e2e_sse_includes_thinking(monkeypatch):
@@ -118,3 +122,7 @@ def test_e2e_sse_includes_thinking(monkeypatch):
     assert 'response part 1' in all_text
     # end event should be present (verify last event type 'end' exists)
     assert any(e == 'end' for e, _ in events)
+    # validate seq numbers
+    token_events = [json.loads(d) for e, d in events if e == 'token']
+    seqs = [int(t['seq']) for t in token_events]
+    assert seqs == list(range(1, len(seqs) + 1))
